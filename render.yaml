@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: hound-forward-unified
+    env: docker
+    plan: free
+    autoDeploy: true
