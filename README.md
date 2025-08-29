@@ -1,39 +1,31 @@
-# Hound Forward (Unified – one service)
+# Hound Forward – Render v4 (Unified)
 
-This repo serves the **frontend** and **FastAPI backend** from a single container.
+- **Real CPU Computer Vision** (OpenCV) producing cadence, duty factors, symmetry indices, speed and a rough stride length estimate.
+- Returns an **annotated frame** (base64 JPEG) and **overlay points** to draw in the UI.
+- **Full-width meter** with clamped pointer so it never overshoots the bar.
+- Single Docker service (serves UI + API). `render.yaml` included.
+
+## Deploy on Render
+1. Push this folder to GitHub.
+2. Render → **New** → **Blueprint** → pick the repo (uses `render.yaml`).
+3. Open the URL; the UI and API share the same domain, API is under `/api`.
 
 ## Local (two terminals)
-
-### Backend
 ```bash
+# Backend dev (optional)
 cd backend
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app:app --reload
 ```
-Open http://127.0.0.1:8000/api/health
-
-### Frontend
 ```bash
+# Frontend dev
 cd frontend
 npm install
 npm run dev
 ```
-Open http://localhost:5173 (dev proxy sends /api → 8000).
+For production Docker build, use the provided `Dockerfile` (multi-stage).
 
-## Single-service deploy (Render)
-
-1. Push this repo to GitHub.
-2. On Render: **New +** → **Blueprint** → select this repo (`render.yaml` present).
-3. Render will build the Dockerfile:
-   - Stage 1 builds Vite UI
-   - Stage 2 installs Python and launches Uvicorn
-4. Your site will be live at `https://<your-app>.onrender.com/` and the API at `/api/...` on the same domain.
-
-## Single-service deploy (Cloud Run)
-
-```bash
-gcloud builds submit --tag gcr.io/PROJECT/hound-forward-unified
-gcloud run deploy hound-forward-unified --image gcr.io/PROJECT/hound-forward-unified --platform managed --allow-unauthenticated --region YOUR_REGION --port 8000
-```
-Visit the URL Cloud Run prints; both UI and API are served there.
+## Notes
+- This is a **fast proxy** for gait metrics; DLC SuperAnimal can be plugged in later for keypoint-level analysis.
+- Keep uploads short (10–15 s, 720p). Increase `MAX_UPLOAD_MB` if your host allows larger bodies.

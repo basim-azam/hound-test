@@ -1,98 +1,50 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-/**
- * Hound Forward – Single-file React + Tailwind UI (wired to /api/analyze)
- * States: upload | consent | processing | result | resultOverlay
- */
+type Step = "upload" | "consent" | "processing" | "result" | "resultOverlay";
+type OverlayPoint = { x:number; y:number; color:string };
 
-export default function App() {
-  type Step = "upload" | "consent" | "processing" | "result" | "resultOverlay";
+export default function App(){
+  const [step,setStep]=useState<Step>("upload");
+  const [file,setFile]=useState<File|null>(null);
+  const [consent,setConsent]=useState(false);
+  const [processing,setProcessing]=useState(0);
+  const [score,setScore]=useState(1);
+  const [message,setMessage]=useState("Analysis complete");
+  const [overlay,setOverlay]=useState<OverlayPoint[]>([]);
+  const [frameB64,setFrameB64]=useState<string|null>(null);
+  const [metrics,setMetrics]=useState<any>(null);
 
-  const [step, setStep] = useState<Step>("upload");
-  const [file, setFile] = useState<File | null>(null);
-
-  // Consent & dog meta
-  const [consent, setConsent] = useState(false);
-  const [breed, setBreed] = useState("");
-  const [age, setAge] = useState("");
-  const [withers, setWithers] = useState<string>("");
-  const [conditions, setConditions] = useState<string[]>([]);
-
-  // Processing
-  const [processing, setProcessing] = useState(0);
-
-  // API result
-  const [score, setScore] = useState<number>(1);
-  const [finding, setFinding] = useState<string>("Left forelimb asymmetry elevated");
-  const [recommendation, setRecommendation] = useState<string>("Consult veterinarian for physical examination");
-
-  // Extracted frame (client-side) for overlay
-  const [frameURL, setFrameURL] = useState<string | null>(null);
-  const [extracting, setExtracting] = useState(false);
-
-  // --------- Handlers ---------
-  const onChooseFile: React.ChangeEventHandler<HTMLInputElement> = (e) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    if (!f.type.startsWith("video/")) {
-      alert("Please upload a video file.");
-      return;
-    }
-    setFile(f);
-    setConsent(false);
-    setStep("consent");
+  const onChoose:React.ChangeEventHandler<HTMLInputElement>=e=>{
+    const f=e.target.files?.[0]; if(!f) return;
+    if(!f.type.startsWith("video/")){ alert("Please upload a video file."); return; }
+    setFile(f); setConsent(false); setStep("consent");
   };
 
-  async function onStartAnalysis() {
-    if (!file) return;
-    // start UI progress immediately
-    setProcessing(0);
-    setStep("processing");
+  async function start(){
+    if(!file) return;
+    setStep("processing"); setProcessing(0); setMessage("Uploading…");
 
-    // progress animation
-    const start = performance.now();
-    const duration = 2500;
-    let raf = 0;
-    const tick = (t: number) => {
-      const p = Math.min(100, ((t - start) / duration) * 100);
-      setProcessing(p);
-      if (p < 100) raf = requestAnimationFrame(tick);
+    const xhr=new XMLHttpRequest();
+    const fd=new FormData(); fd.append("video", file); fd.append("withers_cm","55");
+    xhr.open("POST","/api/analyze");
+    xhr.upload.onprogress=(e)=>{ if(e.lengthComputable){ setProcessing(Math.min(99, (e.loaded/e.total)*90)); } };
+    xhr.onerror=()=>{ setMessage("Network error during upload."); setStep("result"); };
+    xhr.onload=()=>{
+      try{
+        const data=JSON.parse(xhr.responseText);
+        if(xhr.status>=200 && xhr.status<300){
+          setScore(typeof data.score==="number"?data.score:1);
+          setMessage(data.recommendation || "Analysis complete");
+          setOverlay(Array.isArray(data.overlay_points)?data.overlay_points:[]);
+          setFrameB64(data.frame_jpeg_b64 || null);
+          setMetrics(data.metrics || null);
+        }else{
+          setMessage(`Server error (${xhr.status}): ${data.error || xhr.responseText}`);
+        }
+      }catch(e){ setMessage("Invalid server response."); }
+      setProcessing(100); setStep("result");
     };
-    raf = requestAnimationFrame(tick);
-
-    // call API
-    const fd = new FormData();
-    fd.append("video", file);
-    fd.append("withers_cm", withers || "50");
-    fd.append("breed", breed);
-    fd.append("age", age);
-    fd.append("conditions", conditions.join(","));
-    try {
-      const res = await fetch("/api/analyze", { method: "POST", body: fd });
-      const data = await res.json();
-      // update UI from backend
-      if (typeof data.score === "number") setScore(data.score);
-      if (Array.isArray(data.flags) && data.flags.includes("left_forelimb_asymmetry")) {
-        setFinding("Left forelimb asymmetry elevated");
-      } else {
-        setFinding("No significant asymmetry detected");
-      }
-      setRecommendation(data.recommendation || "Monitor at home");
-
-      // extract a display frame locally
-      setExtracting(true);
-      const url = await extractFrameReliable(file);
-      setFrameURL(url);
-      setExtracting(false);
-      setStep("result");
-    } catch (e) {
-      console.error(e);
-      setRecommendation("Upload failed — try again");
-      setStep("result");
-    } finally {
-      cancelAnimationFrame(raf);
-      setProcessing(100);
-    }
+    xhr.send(fd);
   }
 
   return (
@@ -103,126 +55,62 @@ export default function App() {
       </header>
 
       <main className="mx-auto w-full max-w-[1100px] px-6 pb-24">
-        {/* Upload */}
-        {step === "upload" && (
+        {step==="upload" && (
           <section className="rounded-2xl border border-slate-200/70 bg-white/80 p-6 shadow-lg backdrop-blur">
             <div className="flex h-[420px] flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300">
-              <CloudUploadIcon className="mb-4 h-14 w-14 text-slate-500" />
               <p className="mb-2 text-2xl font-semibold">Upload a video</p>
               <p className="mb-6 text-slate-600">Drag or paste a file here, or choose an option below.</p>
-              <label htmlFor="file-input" className="inline-flex cursor-pointer items-center gap-2 rounded-full bg-[#6C63FF] px-5 py-3 text-white shadow hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[#6C63FF]/60">
-                <ImageIcon className="h-5 w-5" />
+              <label htmlFor="file" className="inline-flex cursor-pointer items-center gap-2 rounded-full bg-[#6C63FF] px-5 py-3 text-white shadow hover:shadow-md">
                 Choose File
               </label>
-              <input id="file-input" type="file" accept="video/*" onChange={onChooseFile} className="sr-only" />
+              <input id="file" type="file" accept="video/*" className="sr-only" onChange={onChoose}/>
             </div>
           </section>
         )}
 
-        {/* Consent */}
-        {step === "consent" && (
+        {step==="consent" && (
           <section className="rounded-2xl border border-slate-200/70 bg-white/80 p-6 shadow-lg backdrop-blur">
-            <div className="aspect-video w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-inner">
-              <div className="flex h-full items-center justify-center text-slate-400">16:9 hero image placeholder</div>
-            </div>
-
-            <div className="mt-6 space-y-4">
-              <label className="flex items-start gap-3">
-                <input type="checkbox" className="mt-1 h-5 w-5 rounded border-slate-300 text-[#6C63FF] focus:ring-[#6C63FF]" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
-                <span className="text-sm leading-6 text-slate-700">
-                  By uploading a video, you confirm that you are the owner or have permission to share it. You grant Hound Forward the right to process this video to provide gait analysis results and to improve our service. Videos may be stored securely for quality assurance, training, and research purposes.
-                  <br/><br/>
-                  Your video will not be shared publicly without your explicit consent. You can request deletion of your video at any time by contacting us. By continuing, you agree that your video will be handled in line with our Privacy Policy (to be provided before public launch).
-                </span>
-              </label>
-
-              <div className="grid gap-3 md:grid-cols-4">
-                <Field label="Breed">
-                  <select className="w-full rounded-xl border border-slate-300 p-3 focus:border-[#6C63FF] focus:outline-none focus:ring-2 focus:ring-[#6C63FF]/40" value={breed} onChange={(e) => setBreed(e.target.value)}>
-                    <option value="">Select…</option>
-                    <option>Border Collie</option>
-                    <option>German Shepherd</option>
-                    <option>Labrador Retriever</option>
-                    <option>Golden Retriever</option>
-                    <option>Other</option>
-                  </select>
-                </Field>
-                <Field label="Age">
-                  <select className="w-full rounded-xl border border-slate-300 p-3 focus:border-[#6C63FF] focus:outline-none focus:ring-2 focus:ring-[#6C63FF]/40" value={age} onChange={(e) => setAge(e.target.value)}>
-                    <option value="">Select…</option>
-                    <option>Puppy (0–1)</option>
-                    <option>Adult (2–7)</option>
-                    <option>Senior (8+)</option>
-                  </select>
-                </Field>
-                <Field label="Withers Height (cm)">
-                  <input type="number" min={0} className="w-full rounded-xl border border-slate-300 p-3 focus:border-[#6C63FF] focus:outline-none focus:ring-2 focus:ring-[#6C63FF]/40" value={withers} onChange={(e) => setWithers(e.target.value)} placeholder="e.g., 55" />
-                </Field>
-                <Field label="Conditions">
-                  <select multiple className="h-[52px] w-full rounded-xl border border-slate-300 p-3 focus:border-[#6C63FF] focus:outline-none focus:ring-2 focus:ring-[#6C63FF]/40" onChange={(e) => setConditions(Array.from(e.target.selectedOptions).map((o) => o.value))}>
-                    <option value="none">none</option>
-                    <option value="previous injury">previous injury</option>
-                    <option value="arthritis">arthritis</option>
-                  </select>
-                </Field>
-              </div>
-
-              <div className="mt-2 flex flex-wrap items-center gap-3">
-                <button disabled={!consent || !file} onClick={onStartAnalysis} className={`rounded-full px-6 py-3 text-white shadow transition focus:outline-none focus:ring-2 focus:ring-[#6C63FF]/60 ${consent && file ? "bg-[#6C63FF] hover:shadow-md" : "cursor-not-allowed bg-[#6C63FF]/50"}`}>
-                  Upload
-                </button>
-              </div>
-            </div>
-          </section>
-        )}
-
-        {/* Processing */}
-        {step === "processing" && (
-          <section className="rounded-2xl border border-slate-200/70 bg-white/80 p-6 shadow-lg backdrop-blur">
-            <div className="-mx-6">
-              <div className="relative h-8 w-[calc(100%+3rem)] overflow-hidden rounded-full bg-slate-200/70" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(processing)}>
-                <div className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-emerald-500 via-lime-500 to-green-600 transition-[width]" style={{ width: `${processing}%` }} />
-                <div className="absolute inset-0 flex items-center justify-center text-sm font-semibold text-white mix-blend-difference">Analysing ▶▶</div>
-              </div>
-            </div>
-            <p className="mt-4 text-sm text-slate-700">We’re tracking and analysing your dog’s limbs and estimating stride and symmetry…</p>
+            <label className="flex items-start gap-3">
+              <input type="checkbox" className="mt-1 h-5 w-5 rounded border-slate-300 text-[#6C63FF]" checked={consent} onChange={e=>setConsent(e.target.checked)} />
+              <span className="text-sm leading-6 text-slate-700">
+                By uploading a video, you confirm permission to share it and agree to processing for gait analysis results.
+              </span>
+            </label>
             <div className="mt-4">
-              <button onClick={() => { setStep("upload"); setFile(null); setProcessing(0); }} className="rounded-full border border-slate-300 bg-white/90 px-6 py-3 text-slate-700 shadow-sm transition hover:shadow focus:outline-none focus:ring-2 focus:ring-slate-400/50">Cancel</button>
+              <button disabled={!consent} onClick={start} className={`rounded-full px-6 py-3 text-white ${consent?"bg-[#6C63FF]":"bg-[#6C63FF]/50 cursor-not-allowed"}`}>
+                Upload
+              </button>
             </div>
           </section>
         )}
 
-        {/* Results & Overlay */}
-        {(step === "result" || step === "resultOverlay") && (
+        {step==="processing" && (
           <section className="rounded-2xl border border-slate-200/70 bg-white/80 p-6 shadow-lg backdrop-blur">
-            {step === "result" ? (
-              <FrameWithKeypoints src={frameURL || undefined} extracting={extracting} />
-            ) : (
-              <VideoWithOverlay file={file} />
-            )}
-
-            <div className="mt-6">
-              <ResultMeter score={score} min={0} max={5} />
+            <div className="relative h-8 w-full overflow-hidden rounded-full bg-slate-200/70">
+              <div className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-emerald-500 via-lime-500 to-green-600 transition-[width]" style={{width: processing+"%"}} />
+              <div className="absolute inset-0 flex items-center justify-center text-sm font-semibold text-white">Analysing ▶▶</div>
             </div>
+            <p className="mt-3 text-sm text-slate-700">{message}</p>
+          </section>
+        )}
+
+        {step==="result" && (
+          <section className="rounded-2xl border border-slate-200/70 bg-white/80 p-6 shadow-lg backdrop-blur">
+            <HeroFrame frameB64={frameB64} overlay={overlay}/>
+
+            <div className="mt-6"><ResultMeter score={score} min={0} max={5} /></div>
 
             <div className="mt-4 space-y-1">
-              <p className="text-xl font-bold">Your Dog’s Score: {score}</p>
-              <p className="text-slate-800">{finding}</p>
-              <p className="text-slate-800">{recommendation}</p>
+              <p className="text-xl font-bold">Your Dog’s Score: {Number(score).toFixed(1)}</p>
+              <p className="text-slate-800">{message}</p>
             </div>
+
+            {metrics && <MetricsGrid metrics={metrics}/>}
 
             <p className="mt-5 text-sm text-slate-600">This tool provides informational insights only and is not a veterinary diagnosis. If you have concerns about your dog’s gait, please consult a qualified veterinarian.</p>
 
-            <div className="mt-6 flex flex-wrap gap-3">
-              {step === "result" ? (
-                <button onClick={() => setStep("resultOverlay")} className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white/90 px-5 py-3 text-slate-800 shadow-sm transition hover:shadow focus:outline-none focus:ring-2 focus:ring-slate-400/50">
-                  <PlayIcon className="h-5 w-5" />
-                  Show keypoint overlay
-                </button>
-              ) : (
-                <button onClick={() => setStep("result")} className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white/90 px-5 py-3 text-slate-800 shadow-sm transition hover:shadow focus:outline-none focus:ring-2 focus:ring-slate-400/50">Hide overlay</button>
-              )}
-              <button onClick={() => { setStep("upload"); setFile(null); setConsent(false); setProcessing(0); setFrameURL(null); }} className="rounded-full bg-[#6C63FF] px-6 py-3 text-white shadow transition hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[#6C63FF]/60">Analyze another video</button>
+            <div className="mt-6">
+              <button onClick={()=>{ setStep("upload"); setFile(null); setConsent(false); setProcessing(0); setOverlay([]); setFrameB64(null); setMetrics(null);} } className="rounded-full bg-[#6C63FF] px-6 py-3 text-white shadow">Analyze another video</button>
             </div>
           </section>
         )}
@@ -233,106 +121,49 @@ export default function App() {
   );
 }
 
-/* -------------------------- Subcomponents -------------------------- */
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-sm font-medium text-slate-700">{label}</span>
-      {children}
-    </label>
-  );
-}
-
-function FrameWithKeypoints({ src, extracting }: { src?: string; extracting?: boolean }) {
-  const keypoints = [
-    { x: 0.18, y: 0.40, color: "#E35D5D" }, // left shoulder (elevated)
-    { x: 0.25, y: 0.55, color: "#E35D5D" }, // left elbow
-    { x: 0.60, y: 0.36, color: "#2FB36D" }, // spine
-    { x: 0.80, y: 0.44, color: "#2FB36D" }, // right hip
-    { x: 0.86, y: 0.62, color: "#2FB36D" }, // right knee
-  ];
-
+function HeroFrame({frameB64, overlay}:{frameB64:string|null; overlay:OverlayPoint[]}){
   return (
     <div className="relative aspect-video w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-inner">
-      {src ? (
-        <img src={src} alt="analysis frame" className="h-full w-full object-cover" />
+      {frameB64 ? (
+        <img src={`data:image/jpeg;base64,${frameB64}`} alt="analysis frame" className="h-full w-full object-cover"/>
       ) : (
-        <div className="flex h-full w-full items-center justify-center text-slate-500">
-          {extracting ? "Extracting frame…" : "No frame available"}
-        </div>
+        <div className="flex h-full items-center justify-center text-slate-500">No frame available</div>
       )}
-      {src && (
-        <div className="pointer-events-none absolute inset-0">
-          {keypoints.map((p, i) => (
-            <span key={i} className="absolute h-3 w-3 -translate-x-1.5 -translate-y-1.5 rounded-full ring-2 ring-white/90 shadow" style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%`, backgroundColor: p.color }} />
-          ))}
-        </div>
-      )}
+      {frameB64 && overlay && overlay.map((p,i)=>(
+        <span key={i} className="pointer-events-none absolute h-3 w-3 -translate-x-1.5 -translate-y-1.5 rounded-full ring-2 ring-white/90 shadow" style={{ left:`${p.x*100}%`, top:`${p.y*100}%`, backgroundColor:p.color }} />
+      ))}
     </div>
   );
 }
 
-function VideoWithOverlay({ file }: { file: File | null }) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState(1.0);
-
-  const toggle = () => {
-    const v = videoRef.current;
-    if (!v) return;
-    if (v.paused) { v.play(); setPlaying(true); } else { v.pause(); setPlaying(false); }
-  };
-
-  useEffect(() => { const v = videoRef.current; if (v) v.playbackRate = speed; }, [speed]);
-
-  // dummy points
-  const points = [
-    { x: 0.18, y: 0.40, color: "#E35D5D" },
-    { x: 0.25, y: 0.55, color: "#E35D5D" },
-    { x: 0.60, y: 0.36, color: "#2FB36D" },
-    { x: 0.80, y: 0.44, color: "#2FB36D" },
-    { x: 0.86, y: 0.62, color: "#2FB36D" },
-  ];
-
+function MetricsGrid({metrics}:{metrics:any}){
+  const Card = (p:{label:string; value:string}) => (
+    <div className="rounded-xl border border-slate-200 bg-white/80 p-3 shadow-sm">
+      <div className="text-xs text-slate-600">{p.label}</div>
+      <div className="text-lg font-semibold">{p.value}</div>
+    </div>
+  );
   return (
-    <div className="relative aspect-video w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-inner">
-      {file ? (
-        <video ref={videoRef} className="h-full w-full object-cover" src={URL.createObjectURL(file)} muted playsInline aria-label="Result video" onClick={toggle} />
-      ) : (
-        <div className="flex h-full items-center justify-center text-slate-500">No video</div>
-      )}
-
-      <div className="pointer-events-none absolute inset-0">
-        {points.map((p, i) => (
-          <span key={i} className="absolute h-3 w-3 -translate-x-1.5 -translate-y-1.5 rounded-full ring-2 ring-white/90 shadow" style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%`, backgroundColor: p.color }} />
-        ))}
-      </div>
-
-      <button onClick={toggle} className="absolute left-4 top-4 inline-flex items-center justify-center rounded-full bg-white/90 p-3 text-slate-800 shadow focus:outline-none focus:ring-2 focus:ring-slate-400/60">
-        {playing ? <PauseIcon className="h-6 w-6" /> : <PlayIcon className="h-6 w-6" />}
-        <span className="sr-only">{playing ? "Pause" : "Play"}</span>
-      </button>
-
-      <div className="absolute left-4 bottom-4 rounded-full bg-white/90 px-3 py-2 text-sm text-slate-800 shadow">
-        <span className="mr-2 text-slate-600">Playback speed –</span>
-        {[1.0, 0.5, 0.25].map((s) => (
-          <button key={s} onClick={() => setSpeed(s)} className={`mx-1 rounded-full px-2 py-1 focus:outline-none focus:ring-2 focus:ring-slate-400/60 ${speed === s ? "bg-slate-800 text-white" : "bg-white text-slate-800 border border-slate-300"}`}>{s}</button>
-        ))}
-      </div>
+    <div className="mt-6 grid gap-3 sm:grid-cols-2 md:grid-cols-3">
+      <Card label="Cadence (Hz)" value={Number(metrics.cadence_hz).toFixed(2)} />
+      <Card label="Stride time (s)" value={Number(metrics.stride_time_s).toFixed(2)} />
+      <Card label="LR symmetry index" value={Number(metrics.symmetry_index?.left_right).toFixed(1)} />
+      <Card label="TB symmetry index" value={Number(metrics.symmetry_index?.top_bottom).toFixed(1)} />
+      <Card label="Speed (px/s)" value={Number(metrics.speed_px_s).toFixed(1)} />
+      <Card label="Stride length (px est.)" value={Number(metrics.stride_length_px_est).toFixed(1)} />
     </div>
   );
 }
 
 function ResultMeter({ score, min, max }: { score: number; min: number; max: number }) {
   const ticks = useMemo(() => Array.from({ length: max - min + 1 }, (_, i) => i + min), [min, max]);
-  const pct = ((score - min) / (max - min)) * 100;
+  const clamp = (v:number)=> Math.max(0, Math.min(100, v));
+  const pct = clamp(((score - min) / (max - min)) * 100);
 
   return (
     <div className="w-full">
-      {/* Full-bleed meter to match design */}
-      <div className="relative -mx-6 select-none">
-        <svg viewBox="0 0 100 22" className="block h-14 w-[calc(100%+3rem)]" preserveAspectRatio="none">
+      <div className="relative">
+        <svg viewBox="0 0 100 22" className="block h-14 w-full" preserveAspectRatio="none">
           <defs>
             <linearGradient id="meterGrad" x1="0" x2="1" y1="0" y2="0">
               <stop offset="0%" stopColor="#D84E4E" />
@@ -357,82 +188,9 @@ function ResultMeter({ score, min, max }: { score: number; min: number; max: num
           Analysis complete
         </div>
       </div>
-      <div className="-mx-6 mt-1 flex justify-between px-2 text-xs text-slate-700">
-        <span>0</span>
-        {ticks.slice(1, -1).map((t) => (<span key={t} className="opacity-0">{t}</span>))}
-        <span>5</span>
+      <div className="mt-1 flex justify-between px-1 text-xs text-slate-700">
+        <span>0</span><span>5</span>
       </div>
     </div>
   );
-}
-
-/* ------------------------------ Icons ------------------------------ */
-function CloudUploadIcon(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" {...props} aria-hidden>
-      <path d="M7 18a5 5 0 0 1 0-10 6 6 0 0 1 11.3-1.9A4.5 4.5 1 1 1 21 18H7Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M12 14V8m0 0-3 3m3-3 3 3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
-  );
-}
-function ImageIcon(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" {...props} aria-hidden>
-      <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.6" />
-      <circle cx="9" cy="10" r="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M4 17l5-5 3 3 4-4 4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
-  );
-}
-function PlayIcon(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" {...props} aria-hidden>
-      <path d="M8 5v14l11-7-11-7z" />
-    </svg>
-  );
-}
-function PauseIcon(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" {...props} aria-hidden>
-      <path d="M7 5h4v14H7zM13 5h4v14h-4z" />
-    </svg>
-  );
-}
-
-/* --------------------------- Utilities --------------------------- */
-async function extractFrameReliable(file: File): Promise<string | null> {
-  return new Promise((resolve) => {
-    const url = URL.createObjectURL(file);
-    const video = document.createElement("video");
-    video.src = url;
-    video.preload = "auto";
-    video.muted = true;
-    video.playsInline = true;
-
-    const cleanup = () => URL.revokeObjectURL(url);
-
-    const draw = () => {
-      try {
-        const canvas = document.createElement("canvas");
-        const w = video.videoWidth || 640;
-        const h = video.videoHeight || 360;
-        canvas.width = w; canvas.height = h;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return resolve(null);
-        ctx.drawImage(video, 0, 0, w, h);
-        const data = canvas.toDataURL("image/png");
-        cleanup();
-        resolve(data);
-      } catch { cleanup(); resolve(null); }
-    };
-
-    video.onloadedmetadata = () => {
-      const target = isFinite(video.duration) && video.duration > 1 ? Math.min(video.duration/3, 2) : 0.5;
-      const onSeeked = () => { draw(); video.removeEventListener("seeked", onSeeked); };
-      video.addEventListener("seeked", onSeeked);
-      try { video.currentTime = target; } catch { video.addEventListener("canplay", draw, { once: true }); }
-    };
-
-    video.onerror = () => { cleanup(); resolve(null); };
-  });
 }

@@ -1,6 +1,10 @@
+
 services:
   - type: web
-    name: hound-forward-unified
+    name: hound-forward-render
     env: docker
     plan: free
     autoDeploy: true
+    envVars:
+      - key: MAX_UPLOAD_MB
+        value: 30
