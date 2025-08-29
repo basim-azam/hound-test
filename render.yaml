@@ -1,10 +1,32 @@
-
 services:
   - type: web
-    name: hound-forward-render
+    name: hound-forward-web
     env: docker
-    plan: free
     autoDeploy: true
+    plan: starter
+    buildCommand: docker build -f web/Dockerfile -t hound-forward-web .
+    startCommand: docker run -p 8000:8000 --env REDIS_URL=$REDIS_URL hound-forward-web
     envVars:
-      - key: MAX_UPLOAD_MB
-        value: 30
+      - key: REDIS_URL
+        fromService:
+          name: hound-forward-redis
+          type: redis
+          property: connectionString
+  - type: web
+    name: hound-forward-worker
+    env: docker
+    plan: starter_gpu
+    autoDeploy: true
+    buildCommand: docker build -f worker/Dockerfile -t hound-forward-worker .
+    startCommand: docker run --gpus all --env REDIS_URL=$REDIS_URL --env USE_DLC=True hound-forward-worker
+    envVars:
+      - key: REDIS_URL
+        fromService:
+          name: hound-forward-redis
+          type: redis
+          property: connectionString
+      - key: USE_DLC
+        value: "True"
+  - type: redis
+    name: hound-forward-redis
+    ipAllowList: []
